@@ -5,14 +5,29 @@ const { MongoClient, ObjectId } = require('mongodb');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// CONFIGURAZIONE SICURA - Usa variabili d'ambiente
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+const DATABASE_NAME = process.env.DATABASE_NAME || 'test';
+
+// Verifica che le variabili siano configurate
+if (!process.env.MONGODB_URI) {
+    console.warn('⚠️  ATTENZIONE: MONGODB_URI non configurato! Usando database locale.');
+}
+
 // IMPORTANTE: Sostituisci 'tuosito.com' con il TUO dominio SiteGround!
 const ALLOWED_ORIGINS = [
     'http://localhost:3000',
-	'https://app.valoresposi.it/crm/crm-export.html',
-	'http://app.valoresposi.it/crm/crm-export.html',
-	'https://www.app.valoresposi.it/crm/crm-export.html',
-	'http://www.app.valoresposi.it/crm/crm-export.html',	
+    'https://tuosito.com',
+    'https://www.tuosito.com',
+    'http://tuosito.com',
+    'http://www.tuosito.com'
 ];
+
+// Se hai una variabile d'ambiente per i domini permessi
+if (process.env.ALLOWED_DOMAINS) {
+    const additionalDomains = process.env.ALLOWED_DOMAINS.split(',');
+    ALLOWED_ORIGINS.push(...additionalDomains);
+}
 
 // Configurazione CORS
 app.use(cors({
@@ -23,6 +38,7 @@ app.use(cors({
         if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            console.log(`CORS bloccato per: ${origin}`);
             callback(null, true); // Per test, poi metti false per sicurezza
         }
     },
@@ -31,9 +47,21 @@ app.use(cors({
 
 app.use(express.json());
 
-// Configurazione MongoDB
-const MONGODB_URI = 'mongodb+srv://valoreSposi:9teWj6TRqA5jtY6R@cluster0.25mt0.mongodb.net/valoreSposi';
-const DATABASE_NAME = 'valoreSposi';
+// Funzione per testare la connessione al database
+async function testDatabaseConnection() {
+    const client = new MongoClient(MONGODB_URI);
+    try {
+        await client.connect();
+        console.log('✅ Connessione al database riuscita!');
+        await client.db(DATABASE_NAME).command({ ping: 1 });
+        return true;
+    } catch (error) {
+        console.error('❌ Errore connessione database:', error.message);
+        return false;
+    } finally {
+        await client.close();
+    }
+}
 
 // Funzione per ottenere statistiche CRM
 async function getStatisticheCRM(magazzinoId = null) {
@@ -310,16 +338,30 @@ function convertToCSV(products) {
 
 // ENDPOINTS
 
-// Home
+// Home con info di stato
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
         message: 'CRM Export API - Valore Sposi',
+        environment: process.env.NODE_ENV || 'development',
+        database: process.env.MONGODB_URI ? 'configured' : 'not configured',
         endpoints: {
             statistiche: '/api/statistiche',
             exportCSV: '/api/export-csv',
-            magazzini: '/api/magazzini'
+            magazzini: '/api/magazzini',
+            health: '/api/health'
         }
+    });
+});
+
+// Health check endpoint
+app.get('/api/health', async (req, res) => {
+    const dbConnected = await testDatabaseConnection();
+    
+    res.json({
+        status: dbConnected ? 'healthy' : 'unhealthy',
+        database: dbConnected ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -341,7 +383,7 @@ app.get('/api/statistiche', async (req, res) => {
         console.error('Errore:', error);
         res.status(500).json({
             success: false,
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Errore interno del server'
         });
     }
 });
@@ -366,7 +408,7 @@ app.get('/api/export-csv', async (req, res) => {
         console.error('Errore:', error);
         res.status(500).json({
             success: false,
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Errore durante l\'export'
         });
     }
 });
@@ -393,10 +435,18 @@ app.get('/api/magazzini', async (req, res) => {
         console.error('Errore:', error);
         res.status(500).json({
             success: false,
-            error: error.message
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Errore nel recupero magazzini'
         });
     } finally {
         await client.close();
+    }
+});
+
+// Test connessione all'avvio
+testDatabaseConnection().then(connected => {
+    if (!connected) {
+        console.error('⚠️  ATTENZIONE: Impossibile connettersi al database!');
+        console.error('   Controlla le variabili d\'ambiente su Render.com');
     }
 });
 
@@ -408,11 +458,16 @@ app.listen(PORT, () => {
 ╚═══════════════════════════════════════════════════════════════╝
 
 🚀 Server in ascolto sulla porta: ${PORT}
+🌍 Environment: ${process.env.NODE_ENV || 'development'}
+🔒 Database: ${process.env.MONGODB_URI ? 'CONFIGURATO' : 'NON CONFIGURATO'}
+
 📍 Endpoints disponibili:
+   GET /              → Stato API
+   GET /api/health    → Health check
    GET /api/statistiche
    GET /api/export-csv
    GET /api/magazzini
 
-⚠️  IMPORTANTE: Modifica ALLOWED_ORIGINS con il tuo dominio!
+⚠️  IMPORTANTE: ${ALLOWED_ORIGINS.includes('tuosito.com') ? 'Modifica ALLOWED_ORIGINS con il tuo dominio!' : 'CORS configurato'}
 `);
 });
