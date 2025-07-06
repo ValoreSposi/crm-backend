@@ -17,10 +17,10 @@ if (!process.env.MONGODB_URI) {
 // IMPORTANTE: Sostituisci 'tuosito.com' con il TUO dominio SiteGround!
 const ALLOWED_ORIGINS = [
     'http://localhost:3000',
-    'https://tuosito.com',
-    'https://www.tuosito.com',
-    'http://tuosito.com',
-    'http://www.tuosito.com'
+    'https://app.valoresposi.it/crm/',
+    'http://app.valoresposi.it/crm/',
+    'https://www.app.valoresposi.it/crm/',
+    'http://www.app.valoresposi.it/crm/'
 ];
 
 // Se hai una variabile d'ambiente per i domini permessi
@@ -63,7 +63,7 @@ async function testDatabaseConnection() {
     }
 }
 
-// Funzione per ottenere statistiche CRM
+// ===== FUNZIONE PER STATISTICHE INVENTARIO =====
 async function getStatisticheCRM(magazzinoId = null) {
     const client = new MongoClient(MONGODB_URI);
     
@@ -281,7 +281,394 @@ async function getStatisticheCRM(magazzinoId = null) {
     }
 }
 
-// Funzione per convertire in CSV
+// ===== FUNZIONE PER REPORT VENDITE =====
+async function getReportVendite(anno = null) {
+    const client = new MongoClient(MONGODB_URI);
+    
+    try {
+        await client.connect();
+        const database = client.db(DATABASE_NAME);
+        const collection = database.collection('prodotticlientes');
+        
+        const pipeline = [
+            // Lookup cliente
+            {
+                $lookup: {
+                    from: "clientes",
+                    localField: "cliente",
+                    foreignField: "_id",
+                    as: "cliente_info"
+                }
+            },
+            { $unwind: "$cliente_info" },
+            
+            // Lookup appuntamento
+            {
+                $lookup: {
+                    from: "appuntamentos",
+                    localField: "appuntamento",
+                    foreignField: "_id",
+                    as: "appuntamento_info"
+                }
+            },
+            { $unwind: "$appuntamento_info" }
+        ];
+        
+        // Filtro anno opzionale
+        if (anno && anno !== 'all') {
+            pipeline.push({
+                $match: {
+                    $expr: {
+                        $eq: [
+                            { $year: "$appuntamento_info.dataAppuntamento" },
+                            parseInt(anno)
+                        ]
+                    }
+                }
+            });
+        }
+        
+        // Resto della pipeline
+        pipeline.push(
+            // Lookup atelier
+            {
+                $lookup: {
+                    from: "ateliers",
+                    localField: "appuntamento_info.atelier",
+                    foreignField: "_id",
+                    as: "atelier_info"
+                }
+            },
+            { $unwind: "$atelier_info" },
+            
+            // Lookup dipendente
+            {
+                $lookup: {
+                    from: "users",
+                    localField: "appuntamento_info.dipendente",
+                    foreignField: "_id",
+                    as: "dipendente_info"
+                }
+            },
+            { $unwind: "$dipendente_info" },
+            
+            // Project dati principali
+            {
+                $project: {
+                    DataAppuntamento: {
+                        $dateToString: {
+                            format: "%d/%m/%Y",
+                            date: "$appuntamento_info.dataAppuntamento"
+                        }
+                    },
+                    Atelier: "$atelier_info.nomeAtelier",
+                    Dipendente: { $concat: ["$dipendente_info.firstName", " ", "$dipendente_info.lastName"] },
+                    Cliente: { $concat: ["$cliente_info.nome", " ", "$cliente_info.cognome"] },
+                    DataMatrimonio: {
+                        $dateToString: {
+                            format: "%d/%m/%Y",
+                            date: "$appuntamento_info.dataMatrimonio"
+                        }
+                    },
+                    prodotti: 1
+                }
+            },
+            
+            // Unwind prodotti
+            { $unwind: "$prodotti" },
+            
+            // Lookup prodotto info
+            {
+                $lookup: {
+                    from: "prodottis",
+                    localField: "prodotti.prodotto",
+                    foreignField: "_id",
+                    as: "prodotto_info"
+                }
+            },
+            { $unwind: "$prodotto_info" },
+            
+            // Lookup marca
+            {
+                $lookup: {
+                    from: "marcaprodottis",
+                    localField: "prodotto_info.marcaProdotto",
+                    foreignField: "_id",
+                    as: "marca_info"
+                }
+            },
+            { $unwind: "$marca_info" },
+            
+            // Lookup categoria
+            {
+                $lookup: {
+                    from: "categoriaprodottis",
+                    localField: "prodotto_info.categoriaProdotto",
+                    foreignField: "_id",
+                    as: "categoria_info"
+                }
+            },
+            { $unwind: "$categoria_info" },
+            
+            // Lookup tipologia
+            {
+                $lookup: {
+                    from: "tipologiaprodottis",
+                    localField: "prodotto_info.tipologiaProdotto",
+                    foreignField: "_id",
+                    as: "tipologia_info"
+                }
+            },
+            { $unwind: "$tipologia_info" },
+            
+            // Lookup taglia
+            {
+                $lookup: {
+                    from: "tagliaclientes",
+                    localField: "prodotto_info.tagliaProdotto",
+                    foreignField: "_id",
+                    as: "taglia_info"
+                }
+            },
+            { $unwind: "$taglia_info" },
+            
+            // Lookup modello
+            {
+                $lookup: {
+                    from: "modelloprodottis",
+                    localField: "prodotto_info.modelloProdotto",
+                    foreignField: "_id",
+                    as: "modello_info"
+                }
+            },
+            { $unwind: "$modello_info" },
+            
+            // Lookup colore
+            {
+                $lookup: {
+                    from: "coloreprodottis",
+                    localField: "prodotto_info.coloreProdotto",
+                    foreignField: "_id",
+                    as: "colore_info"
+                }
+            },
+            { $unwind: "$colore_info" },
+            
+            // Lookup carico con trim
+            {
+                $lookup: {
+                    from: "caricoscaricos",
+                    let: {
+                        codiceProdotto: { $trim: { input: "$prodotti.codice" } }
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                tipoCarico: "Carico"
+                            }
+                        },
+                        { $unwind: "$prodotti" },
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: [
+                                        { $trim: { input: "$prodotti.codice" } },
+                                        "$$codiceProdotto"
+                                    ]
+                                }
+                            }
+                        },
+                        { $sort: { dataCarico: 1 } },
+                        { $limit: 1 }
+                    ],
+                    as: "carico_info"
+                }
+            },
+            
+            // Add fornitoreId
+            {
+                $addFields: {
+                    fornitoreId: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$carico_info" }, 0] },
+                            then: { $arrayElemAt: ["$carico_info.fornitore", 0] },
+                            else: null
+                        }
+                    }
+                }
+            },
+            
+            // Lookup fornitore
+            {
+                $lookup: {
+                    from: "fornitoris",
+                    localField: "fornitoreId",
+                    foreignField: "_id",
+                    as: "fornitore_info"
+                }
+            },
+            
+            // Project finale
+            {
+                $project: {
+                    _id: 0,
+                    DataAppuntamento: 1,
+                    Atelier: 1,
+                    Dipendente: 1,
+                    Cliente: 1,
+                    DataMatrimonio: 1,
+                    Categoria: "$categoria_info.descrizione",
+                    Modello: "$modello_info.descrizione",
+                    Marca: "$marca_info.descrizione",
+                    Tipologia: "$tipologia_info.descrizione",
+                    Taglia: "$taglia_info.descrizione",
+                    Quantita: {
+                        $convert: {
+                            input: "$prodotti.quantita",
+                            to: "double",
+                            onError: 1,
+                            onNull: 1
+                        }
+                    },
+                    "Vendita/Noleggio": {
+                        $cond: {
+                            if: { $eq: ["$prodotti.checked", "2"] },
+                            then: "Noleggiato",
+                            else: "Venduto"
+                        }
+                    },
+                    Colore: "$colore_info.descrizione",
+                    Codice_Prodotto: "$prodotti.codice",
+                    Prezzo_Vendita: {
+                        $let: {
+                            vars: {
+                                prezzoBase: {
+                                    $convert: {
+                                        input: "$prodotti.prezzoVendita",
+                                        to: "double",
+                                        onError: 0,
+                                        onNull: 0
+                                    }
+                                },
+                                scontoPerc: {
+                                    $convert: {
+                                        input: "$prodotti.scontoPerc",
+                                        to: "double",
+                                        onError: 0,
+                                        onNull: 0
+                                    }
+                                },
+                                scontoValore: {
+                                    $convert: {
+                                        input: "$prodotti.sconto",
+                                        to: "double",
+                                        onError: 0,
+                                        onNull: 0
+                                    }
+                                }
+                            },
+                            in: {
+                                $subtract: [
+                                    {
+                                        $subtract: [
+                                            "$$prezzoBase",
+                                            {
+                                                $multiply: [
+                                                    "$$prezzoBase",
+                                                    { $divide: ["$$scontoPerc", 100] }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "$$scontoValore"
+                                ]
+                            }
+                        }
+                    },
+                    Fornitore: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$fornitore_info" }, 0] },
+                            then: { $arrayElemAt: ["$fornitore_info.nomeFornitore", 0] },
+                            else: "Non specificato"
+                        }
+                    },
+                    PrezzoAcquisto: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$carico_info" }, 0] },
+                            then: {
+                                $convert: {
+                                    input: { $arrayElemAt: ["$carico_info.prodotti.prezzoAcquisto", 0] },
+                                    to: "double",
+                                    onError: -1,
+                                    onNull: -1
+                                }
+                            },
+                            else: -999
+                        }
+                    },
+                    PrezzoCartellino: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$carico_info" }, 0] },
+                            then: {
+                                $convert: {
+                                    input: { $arrayElemAt: ["$carico_info.prodotti.prezzoCartellino", 0] },
+                                    to: "double",
+                                    onError: -1,
+                                    onNull: -1
+                                }
+                            },
+                            else: -999
+                        }
+                    },
+                    PrezzoSuggerito: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$carico_info" }, 0] },
+                            then: {
+                                $convert: {
+                                    input: { $arrayElemAt: ["$carico_info.prodotti.prezzoSuggerito", 0] },
+                                    to: "double",
+                                    onError: -1,
+                                    onNull: -1
+                                }
+                            },
+                            else: -999
+                        }
+                    },
+                    PrezzoAffiliato: {
+                        $cond: {
+                            if: { $gt: [{ $size: "$carico_info" }, 0] },
+                            then: {
+                                $convert: {
+                                    input: { $arrayElemAt: ["$carico_info.prodotti.prezzoAffiliato", 0] },
+                                    to: "double",
+                                    onError: -1,
+                                    onNull: -1
+                                }
+                            },
+                            else: -999
+                        }
+                    }
+                }
+            }
+        );
+        
+        // Esecuzione pipeline
+        const cursor = collection.aggregate(pipeline, { allowDiskUse: true });
+        const results = await cursor.toArray();
+        
+        return results;
+        
+    } catch (error) {
+        console.error('Errore in getReportVendite:', error);
+        throw error;
+    } finally {
+        await client.close();
+    }
+}
+
+// ===== FUNZIONI CONVERSIONE CSV =====
+
+// Funzione per convertire in CSV (inventario)
 function convertToCSV(products) {
     const headers = [
         'Magazzino',
@@ -336,7 +723,72 @@ function convertToCSV(products) {
     return csvContent;
 }
 
-// ENDPOINTS
+// Funzione per convertire report vendite in CSV
+function convertVenditeToCSV(records) {
+    const headers = [
+        'Data Appuntamento',
+        'Atelier',
+        'Dipendente',
+        'Cliente',
+        'Data Matrimonio',
+        'Categoria',
+        'Modello',
+        'Marca',
+        'Tipologia',
+        'Taglia',
+        'Quantità',
+        'Vendita/Noleggio',
+        'Colore',
+        'Codice Prodotto',
+        'Prezzo Vendita',
+        'Fornitore',
+        'Prezzo Acquisto',
+        'Prezzo Cartellino',
+        'Prezzo Suggerito',
+        'Prezzo Affiliato'
+    ];
+    
+    let csvContent = headers.join(';') + '\n';
+    
+    records.forEach(record => {
+        const row = [
+            record.DataAppuntamento || '',
+            record.Atelier || '',
+            record.Dipendente || '',
+            record.Cliente || '',
+            record.DataMatrimonio || '',
+            record.Categoria || '',
+            record.Modello || '',
+            record.Marca || '',
+            record.Tipologia || '',
+            record.Taglia || '',
+            record.Quantita || 0,
+            record['Vendita/Noleggio'] || '',
+            record.Colore || '',
+            record.Codice_Prodotto || '',
+            (record.Prezzo_Vendita || 0).toFixed(2).replace('.', ','),
+            record.Fornitore || '',
+            record.PrezzoAcquisto === -999 ? 'N/D' : (record.PrezzoAcquisto || 0).toFixed(2).replace('.', ','),
+            record.PrezzoCartellino === -999 ? 'N/D' : (record.PrezzoCartellino || 0).toFixed(2).replace('.', ','),
+            record.PrezzoSuggerito === -999 ? 'N/D' : (record.PrezzoSuggerito || 0).toFixed(2).replace('.', ','),
+            record.PrezzoAffiliato === -999 ? 'N/D' : (record.PrezzoAffiliato || 0).toFixed(2).replace('.', ',')
+        ];
+        
+        const escapedRow = row.map(value => {
+            const strValue = String(value);
+            if (strValue.includes(';') || strValue.includes('"') || strValue.includes('\n')) {
+                return `"${strValue.replace(/"/g, '""')}"`;
+            }
+            return strValue;
+        });
+        
+        csvContent += escapedRow.join(';') + '\n';
+    });
+    
+    return csvContent;
+}
+
+// ===== ENDPOINTS API =====
 
 // Home con info di stato
 app.get('/', (req, res) => {
@@ -346,9 +798,14 @@ app.get('/', (req, res) => {
         environment: process.env.NODE_ENV || 'development',
         database: process.env.MONGODB_URI ? 'configured' : 'not configured',
         endpoints: {
+            // Inventario
             statistiche: '/api/statistiche',
             exportCSV: '/api/export-csv',
             magazzini: '/api/magazzini',
+            // Vendite
+            reportVendite: '/api/report-vendite',
+            exportVenditeCSV: '/api/export-vendite-csv',
+            // Sistema
             health: '/api/health'
         }
     });
@@ -365,7 +822,9 @@ app.get('/api/health', async (req, res) => {
     });
 });
 
-// API: Ottieni statistiche
+// ===== ENDPOINTS INVENTARIO =====
+
+// API: Ottieni statistiche inventario
 app.get('/api/statistiche', async (req, res) => {
     try {
         const magazzinoId = req.query.magazzino || null;
@@ -388,7 +847,7 @@ app.get('/api/statistiche', async (req, res) => {
     }
 });
 
-// API: Export CSV
+// API: Export CSV inventario
 app.get('/api/export-csv', async (req, res) => {
     try {
         const magazzinoId = req.query.magazzino || null;
@@ -442,6 +901,57 @@ app.get('/api/magazzini', async (req, res) => {
     }
 });
 
+// ===== ENDPOINTS VENDITE =====
+
+// API: Report vendite
+app.get('/api/report-vendite', async (req, res) => {
+    try {
+        const anno = req.query.anno || null;
+        console.log(`[${new Date().toISOString()}] Richiesta report vendite - Anno: ${anno || 'tutti'}`);
+        
+        const records = await getReportVendite(anno);
+        
+        res.json({
+            success: true,
+            count: records.length,
+            data: records
+        });
+        
+    } catch (error) {
+        console.error('Errore report vendite:', error);
+        res.status(500).json({
+            success: false,
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Errore nel recupero dati vendite'
+        });
+    }
+});
+
+// API: Export vendite CSV
+app.get('/api/export-vendite-csv', async (req, res) => {
+    try {
+        const anno = req.query.anno || null;
+        console.log(`[${new Date().toISOString()}] Export CSV vendite - Anno: ${anno || 'tutti'}`);
+        
+        const records = await getReportVendite(anno);
+        const csv = convertVenditeToCSV(records);
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const annoSuffix = anno && anno !== 'all' ? `_${anno}` : '_completo';
+        const filename = `report_vendite${annoSuffix}_${timestamp}.csv`;
+        
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send('\ufeff' + csv);
+        
+    } catch (error) {
+        console.error('Errore export vendite:', error);
+        res.status(500).json({
+            success: false,
+            error: process.env.NODE_ENV === 'development' ? error.message : 'Errore durante l\'export vendite'
+        });
+    }
+});
+
 // Test connessione all'avvio
 testDatabaseConnection().then(connected => {
     if (!connected) {
@@ -462,11 +972,19 @@ app.listen(PORT, () => {
 🔒 Database: ${process.env.MONGODB_URI ? 'CONFIGURATO' : 'NON CONFIGURATO'}
 
 📍 Endpoints disponibili:
+   
+   SISTEMA:
    GET /              → Stato API
    GET /api/health    → Health check
-   GET /api/statistiche
-   GET /api/export-csv
-   GET /api/magazzini
+   
+   INVENTARIO:
+   GET /api/statistiche     → Dati inventario (JSON)
+   GET /api/export-csv      → Export inventario (CSV)
+   GET /api/magazzini       → Lista magazzini
+   
+   VENDITE:
+   GET /api/report-vendite      → Report vendite (JSON)
+   GET /api/export-vendite-csv  → Export vendite (CSV)
 
 ⚠️  IMPORTANTE: ${ALLOWED_ORIGINS.includes('tuosito.com') ? 'Modifica ALLOWED_ORIGINS con il tuo dominio!' : 'CORS configurato'}
 `);
